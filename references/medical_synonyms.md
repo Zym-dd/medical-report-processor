@@ -30,7 +30,7 @@ Add new synonym entries as new hospital report patterns are discovered.
 
 - 收缩压, 高压, SBP → systolic_bp
 - 舒张压, 低压, DBP → diastolic_bp
-- 脉搏, 心率, 脉率, 脉搏数 → pulse
+- 脉搏, 脉率, 脉搏数, 心率 → pulse
 
 ---
 
@@ -54,7 +54,7 @@ Add new synonym entries as new hospital report patterns are discovered.
 
 - 血红蛋白, 血红蛋白浓度, 血色素, Hb, HGB → hemoglobin
 - 红细胞平均体积, 平均红细胞体积, MCV → mean_corpuscular_volume
-- 红细胞计数, 红细胞, 红细胞数, RBC → red_blood_cell_count
+- 红细胞计数, 红细胞[血], 红细胞数, RBC → red_blood_cell_count
 - 平均红细胞血红蛋白含量, 平均血红蛋白含量, 平均血红蛋白量, MCH → mean_corpuscular_hemoglobin
 - 平均红细胞血红蛋白浓度, 平均血红蛋白浓度, MCHC → mean_corpuscular_hemoglobin_concentration
 - 红细胞压积, 血细胞比容, 红细胞比积, HCT, Ht → hematocrit

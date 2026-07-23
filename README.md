@@ -7,6 +7,8 @@
 ```
 medical-report-processor/
 ├── SKILL.md                          # 技能说明文档
+├── README.md                         # 项目文档
+├── requirements.txt                  # Python依赖
 ├── scripts/
 │   └── process.py                    # 核心处理脚本
 ├── assets/
@@ -20,12 +22,57 @@ medical-report-processor/
 
 ```bash
 # 安装依赖
-pip install PyPDF2 pdfplumber pymupdf
+pip install -r requirements.txt
+```
 
-# 处理PDF
+### 使用方式一：自然语言对话
+
+通过Agent直接对话使用：
+
+```
+# 基本使用
+"帮我处理这份体检报告PDF"
+"从这个PDF中提取健康指标"
+"生成这份报告的映射文件和数据文件"
+
+# 指定输出类型
+"只要映射文件"          → 只输出映射文件
+"生成数据文件"          → 只输出数据文件
+"生成全部文件"          → 输出两种文件（默认）
+
+# 批量处理
+"处理这个文件夹里的所有体检报告"
+"帮我处理这三份PDF：张三.pdf 李四.pdf 王五.pdf"
+```
+
+**关键词识别：**
+- 包含"映射"、"mapping" → 只输出映射文件
+- 包含"数据"、"data" → 只输出数据文件
+- 包含"全部"、"两种"、"both" → 输出两种文件
+- 无关键词 → 默认输出两种文件
+
+### 使用方式二：命令行（开发调试用）
+
+**⚠️ 注意：命令行方式缺少AI推理能力，效果较差！**
+
+- ❌ **映射文件效果极差** - 无法智能识别医院指标名称变体
+- ❌ **数据文件会漏检** - 缺少AI上下文理解，无法处理特殊格式
+- ❌ **只依赖正则规则** - 无法应对不同医院的命名差异
+
+```bash
+# 处理单个PDF
 python scripts/process.py report.pdf --both
+
+# 处理多个PDF
 python scripts/process.py report1.pdf report2.pdf --both
+
+# 处理文件夹中的所有PDF
 python scripts/process.py ./reports/ --mapping
+
+# 参数说明
+# --mapping  只输出映射文件
+# --data     只输出数据文件
+# --both     输出两种文件（默认）
 ```
 
 ---
@@ -117,9 +164,9 @@ python scripts/process.py ./reports/ --mapping
 
 如需修改提取逻辑，编辑 `scripts/process.py`：
 
-- **新增单位**：修改第225-232行 `MEDICAL_UNITS` 列表
-- **患者信息提取**：修改第148-217行 `extract_patient_info()` 函数
-- **指标提取策略**：修改第379-511行 `extract_indicators_from_text()` 函数
+- **新增单位**：修改 `MEDICAL_UNITS` 列表
+- **患者信息提取**：修改 `extract_patient_info()` 函数
+- **指标提取策略**：修改 `extract_indicators_from_text()` 函数
 
 ---
 
@@ -137,20 +184,16 @@ python scripts/process.py test_report.pdf --both
 
 ## 常见问题
 
-**Q: 修改模板后，之前的映射文件还能用吗？**
-
-A: 不能。需重新处理所有PDF，生成新的映射文件。
-
 **Q: 程序如何处理不在模板中的指标？**
 
 A: 静默丢弃，确保输出数据的一致性。
 
-**Q: 如何支持新的PDF格式？**
+**Q: 如何处理识别错误的指标？**
 
 A:
-- 格式识别问题：修改 `process.py` 中的提取策略
-- 指标名称变体：在 `medical_synonyms.md` 添加映射
-- 单位变化：在 `MEDICAL_UNITS` 列表添加新单位
+1. 检查 `medical_synonyms.md` 是否缺少该医院的名称变体
+2. 确认指标名称在 `mappings_template.csv` 中已定义
+3. 如需特殊处理，修改 `process.py` 中的提取策略
 
 ---
 

@@ -1,16 +1,13 @@
 """
-Medical Report Processor - Core Processing Script
-===================================================
-Processes PDF medical examination reports, extracts indicators,
-generates mapping files and data files.
+体检报告处理器 - 核心处理脚本
+=====================================
 
-Usage:
-    python scripts/process.py <pdf_paths...> [--mapping] [--data] [--both]
+这个脚本负责：
+1. 从PDF体检报告中提取文本内容
+2. 识别医院名称和患者信息
+3. 提取各项医学指标数据
+4. 生成标准化的映射文件和数据文件
 
-Examples:
-    python scripts/process.py report.pdf --both
-    python scripts/process.py report1.pdf report2.pdf --both
-    python scripts/process.py ./reports/ --mapping
 """
 
 import argparse
@@ -24,11 +21,20 @@ from typing import Dict, List, Optional, Tuple
 
 
 # ============================================================
-# Configuration — Load template
+# 第一步：加载标准模板
 # ============================================================
 
 def load_mappings_template() -> List[Dict[str, str]]:
-    """Load the fixed mappings template with 52 standard items."""
+    """
+    加载指标映射模板（核心配置文件）
+
+    这个模板定义了所有需要提取的标准指标，包括：
+    - 指标的标准中文名称（canonical_name）
+    - 指标的标准英文名称（official_feature_name）
+    - 单位、参考范围、分组等信息
+
+    返回：包含所有指标定义的列表
+    """
     skill_dir = Path(__file__).parent.parent
     template_path = skill_dir / "assets" / "mappings_template.csv"
 
@@ -38,17 +44,31 @@ def load_mappings_template() -> List[Dict[str, str]]:
 
 
 # ============================================================
-# PDF Reading
+# 第二步：收集和读取PDF文件
 # ============================================================
 
 def collect_pdf_files(paths: List[str]) -> List[Path]:
-    """Collect PDF files from paths (files or directories)."""
+    """
+    收集所有需要处理的PDF文件
+
+    支持三种输入方式：
+    1. 单个PDF文件路径
+    2. 多个PDF文件路径
+    3. 包含PDF的文件夹路径
+
+    参数：
+        paths: 文件路径列表
+
+    返回：整理后的PDF文件路径列表
+    """
     pdf_files = []
     for p in paths:
         path = Path(p)
         if path.is_dir():
+            # 如果是文件夹，递归搜索所有PDF文件
             pdf_files.extend(sorted(path.rglob("*.pdf")))
         elif path.is_file() and path.suffix.lower() == ".pdf":
+            # 如果是PDF文件，直接添加
             pdf_files.append(path)
         else:
             print(f"  [SKIP] Not a PDF: {p}")
@@ -56,8 +76,20 @@ def collect_pdf_files(paths: List[str]) -> List[Path]:
 
 
 def read_pdf_text(pdf_path: Path) -> str:
-    """Extract text from a PDF file. Tries multiple backends."""
-    # Try PyPDF2 first
+    """
+    从PDF文件中提取文本内容
+
+    这个函数会尝试多个PDF解析库（按优先级）：
+    1. PyPDF2 - 纯Python实现，兼容性好
+    2. pdfplumber - 表格提取能力强
+    3. pymupdf (fitz) - 速度快，功能全
+
+    参数：
+        pdf_path: PDF文件路径
+
+    返回：提取的文本内容
+    """
+    # 尝试PyPDF2（优先）
     try:
         from PyPDF2 import PdfReader
         reader = PdfReader(str(pdf_path))
@@ -71,7 +103,7 @@ def read_pdf_text(pdf_path: Path) -> str:
     except Exception:
         pass
 
-    # Try pdfplumber
+    # 尝试pdfplumber
     try:
         import pdfplumber
         with pdfplumber.open(str(pdf_path)) as pdf:
@@ -85,7 +117,7 @@ def read_pdf_text(pdf_path: Path) -> str:
     except Exception:
         pass
 
-    # Try pymupdf (fitz)
+    # 尝试pymupdf (fitz)
     try:
         import fitz
         doc = fitz.open(str(pdf_path))
@@ -100,26 +132,40 @@ def read_pdf_text(pdf_path: Path) -> str:
     except Exception:
         pass
 
+    # 如果所有PDF库都失败，返回空字符串并提示用户
     print(f"  [WARN] Cannot read PDF text (no PDF library available): {pdf_path.name}")
     print(f"         Install one of: PyPDF2, pdfplumber, or pymupdf")
     return ""
 
 
 # ============================================================
-# Hospital Detection
+# 第三步：识别医院名称
 # ============================================================
 
 def detect_hospital_name(text: str) -> str:
-    """Detect hospital name from PDF text."""
+    """
+    从PDF文本中识别医院名称
+
+    检测策略（按优先级）：
+    1. 在报告标题中查找（如"XX医院体检报告"）
+    2. 在表格字段中查找（如"医院名称：XX医院"）
+    3. 在报告开头查找独立的医院名称
+
+    参数：
+        text: PDF文本内容
+
+    返回：医院名称（如果识别失败，返回"Unknown_Hospital"）
+    """
     patterns = [
-        # Pattern 1: XX医院体检报告 / XX医院健康体检报告
+        # 模式1: XX医院体检报告 / XX医院健康体检报告
         r'([\u4e00-\u9fa5]{2,20}(?:医院|体检中心|健康管理中心|卫生服务中心|医疗中心|卫生院))\s*(?:体检|健康体检|健康检查)',
-        # Pattern 2: 体检机构/医院名称 header
+        # 模式2: 体检机构/医院名称 header
         r'(?:体检机构|医院名称|体检单位|医疗机构)[：:\s]*([\u4e00-\u9fa5]{2,20}(?:医院|体检中心|健康管理中心|卫生服务中心|医疗中心|卫生院))',
-        # Pattern 3: Standalone hospital name near the top of the report
+        # 模式3: 报告顶部的独立医院名称
         r'^([\u4e00-\u9fa5]{2,20}(?:医院|体检中心|健康管理中心|医疗中心))\s*$',
     ]
 
+    # 只检查前30行（医院名称通常在报告开头）
     lines = text.split("\n")
     first_30_lines = "\n".join(lines[:30])
 
@@ -130,7 +176,7 @@ def detect_hospital_name(text: str) -> str:
             if len(name) >= 4:
                 return name
 
-    # Fallback: find any institution-like name
+    # 后备方案：查找任何类似医院的名称
     fallback = re.search(
         r'([\u4e00-\u9fa5]{2,20}(?:医院|体检中心|健康管理中心|医疗中心))',
         first_30_lines
@@ -142,14 +188,28 @@ def detect_hospital_name(text: str) -> str:
 
 
 # ============================================================
-# Patient Info Extraction
+# 第四步：提取患者基本信息
 # ============================================================
 
 def extract_patient_info(text: str) -> Dict[str, str]:
-    """Extract patient basic info from PDF text."""
+    """
+    从PDF文本中提取患者基本信息
+
+    提取的信息包括：
+    - 姓名（姓名、受检者、被检人）
+    - 性别（统一为"男"或"女"）
+    - 年龄
+    - 体检年份（从体检日期中提取）
+    - ID（档案号、登记号、身份证号）
+
+    参数：
+        text: PDF文本内容
+
+    返回：包含患者信息的字典
+    """
     info = {}
 
-    # Name (姓名)
+    # 姓名
     name_patterns = [
         r'姓\s*名[：:]\s*([^\s\n\d]{2,4})',
         r'受检者[：:]\s*([^\s\n\d]{2,4})',
@@ -160,7 +220,7 @@ def extract_patient_info(text: str) -> Dict[str, str]:
         m = re.search(pat, text)
         if m:
             name = m.group(1).strip()
-            # Filter out non-name text
+            # 过滤非姓名文本
             name = re.sub(r'[^\u4e00-\u9fa5]', '', name)
             if 2 <= len(name) <= 4:
                 info['sample_name'] = name
@@ -168,17 +228,17 @@ def extract_patient_info(text: str) -> Dict[str, str]:
     if 'sample_name' not in info:
         info['sample_name'] = 'Unknown'
 
-    # Gender (性别)
+    # 性别
     gender_pat = re.search(r'性\s*别[：:]\s*(男|女)', text)
     if gender_pat:
         info['sex'] = gender_pat.group(1)
     else:
-        # Fallback: look for standalone 男/女 near age
+        # 后备方案：在年龄附近查找独立的"男"或"女"
         gender_fallback = re.search(r'[男女]\s*[·•]?\s*\d{1,3}', text)
         if gender_fallback:
             info['sex'] = gender_fallback.group(0)[0]
 
-    # Age (年龄)
+    # 年龄
     age_pat = re.search(r'年\s*龄[：:]\s*(\d{1,3})', text)
     if age_pat:
         info['age'] = age_pat.group(1)
@@ -187,12 +247,12 @@ def extract_patient_info(text: str) -> Dict[str, str]:
         if age_fallback:
             info['age'] = age_fallback.group(1)
 
-    # Exam year (体检日期 → extract year)
+    # 体检年份（从体检日期中提取）
     year_patterns = [
         r'体检日期[：:]\s*(\d{4})',
         r'检查日期[：:]\s*(\d{4})',
         r'报告日期[：:]\s*(\d{4})',
-        r'(\d{4})[-/年]\d{1,2}[-/月]\d{1,2}',  # Date format
+        r'(\d{4})[-/年]\d{1,2}[-/月]\d{1,2}',  # 日期格式
     ]
     for pat in year_patterns:
         m = re.search(pat, text)
@@ -200,13 +260,13 @@ def extract_patient_info(text: str) -> Dict[str, str]:
             info['exam_year'] = m.group(1)
             break
 
-    # ID (档案号/登记号/身份证号)
+    # ID（档案号/登记号/身份证号）
     id_patterns = [
         r'档案号[：:]\s*(\d{10,20})',
         r'登记号[：:]\s*(\d{10,20})',
         r'编号[：:]\s*(\d{10,20})',
         r'身份证号[：:]\s*(\d{15,18})',
-        r'(\d{15,18})',  # Fallback
+        r'(\d{15,18})',  # 后备方案
     ]
     for pat in id_patterns:
         m = re.search(pat, text)
@@ -218,10 +278,10 @@ def extract_patient_info(text: str) -> Dict[str, str]:
 
 
 # ============================================================
-# Indicator Extraction
+# 指标提取
 # ============================================================
 
-# Common medical units (sorted by length descending for greedy matching)
+# 常见医学单位（按长度降序排列，用于贪婪匹配）
 MEDICAL_UNITS = sorted([
     '10^9/L', '10^12/L', 'mmol/L', 'μmol/L', 'umol/L',
     'ml/min/1.73m^2', 'ml/min', 'mIU/L', 'ng/ml',
@@ -233,21 +293,21 @@ MEDICAL_UNITS = sorted([
 
 
 def _join_split_names(text: str) -> str:
-    """Pre-process: join indicator names split across PDF lines.
+    """预处理：拼接跨PDF行的指标名称
 
-    Pattern: name_line_ending_in_chinese + number_line + trailing_chinese
-    Example:
+    模式：以中文结尾的名称行 + 数字行 + 中文尾部
+    示例：
       丙氨酸氨基转移
       12.80 7-40 U/L
       酶
-    Becomes:
+    变为：
       丙氨酸氨基转移酶 12.80 7-40 U/L
 
-    Also handles: name + number_line where trailing chars are on same line:
+    也处理：名称 + 数字行，尾部字符在同一行：
       平均红细胞血红
       333.00 316-354 g/L
       蛋白浓度
-    Becomes:
+    变为：
       平均红细胞血红蛋白浓度 333.00 316-354 g/L
     """
     lines = text.split('\n')
@@ -255,7 +315,7 @@ def _join_split_names(text: str) -> str:
     i = 0
     while i < len(lines):
         line = lines[i]
-        # Only join if: line ends with Chinese AND does NOT already contain
+        # 只在以下情况拼接：行以中文结尾且不包含
         # a complete value+unit or value+ref pattern
         has_value = bool(re.search(r'\d+\.?\d*\s+(?:[a-zA-Z/%μ^²³]+|次/|[Uu]/[Ll]|mm[oO]l|kg|cm|mmHg)', line))
         has_ref_range = bool(re.search(r'(?<!\d{4})\d{1,3}\.?\d*\s*[－—\-~至到]+\s*\d+', line))
@@ -267,9 +327,9 @@ def _join_split_names(text: str) -> str:
             i + 1 < len(lines)):
 
             next_line = lines[i + 1]
-            # Next line starts with a number (likely the value)
+            # 下一行以数字开头（可能是数值）
             if re.match(r'^\s*\d+\.?\d*', next_line):
-                # Check if line+2 exists and is short Chinese (the name tail)
+                # 检查第+2行是否存在且是短中文（指标名尾部）
                 name_tail = ''
                 if i + 2 < len(lines):
                     third = lines[i + 2].strip()
@@ -278,7 +338,7 @@ def _join_split_names(text: str) -> str:
                         name_tail = third
                         i += 1  # consume the tail line
 
-                # Join: name_line + name_tail + space + value line
+                # 拼接：名称行 + 名称尾部 + 空格 + 值行
                 joined = line.rstrip() + name_tail + ' ' + next_line.strip()
                 result.append(joined)
                 i += 2  # consumed 3 lines (name, value, tail) or 2 (name, value)
@@ -292,17 +352,17 @@ def _join_split_names(text: str) -> str:
 
 def _second_pass_scan(text: str, template_canonical: set,
                       existing: Dict[str, Dict]) -> Dict[str, Dict]:
-    """Second-pass: relaxed scanning for indicators missed in first pass.
+    """第二遍扫描：宽松扫描以捕获第一遍遗漏的指标
 
-    Used when first-pass extraction misses items. Uses broader patterns:
-    - Colon format in paragraphs: name：valueU/L
-    - Summary format: 小结：.*name: value
-    - Inline name-value: name value units in any context
+    当第一遍提取遗漏项目时使用。使用更宽松的模式：
+    - 段落中的冒号格式：名称：值
+    - 小结格式：小结：.*名称: 值
+    - 行内名称-值：名称 值 单位（任何上下文）
     """
     new_results = {}
 
-    # --- Pattern A: Colon in paragraphs with possible unit attached ---
-    # Matches: 丙氨酸氨基转移酶：76.10U/L, 低密度脂蛋白胆固醇：4.11mmol/L
+    # --- 模式A: 段落中的冒号格式（带单位）---
+    # 匹配：丙氨酸氨基转移酶：76.10U/L, 低密度脂蛋白胆固醇：4.11mmol/L
     colon_with_unit = re.compile(
         r'([\u4e00-\u9fa5a-zA-Z()（）]{2,30})[：:]\s*(\d+\.?\d*)\s*([a-zA-Z/%μ^²³]+(?:/[a-zA-Z]+)?)'
     )
@@ -315,10 +375,10 @@ def _second_pass_scan(text: str, template_canonical: set,
                 'value': value, 'unit': unit, 'original_name': name
             }
 
-    # --- Pattern B: Summary/bullet format ---
-    # Matches: 小结：红细胞分布宽度(SD): 48.40 fL
-    #         1、锌: 7.80 μmol/L
-    #         2、高密度脂蛋白胆固醇: 2.38 mmol/L
+    # --- 模式B: 小结/列表格式 ---
+    # 匹配：小结：红细胞分布宽度(SD): 48.40 fL
+    #      1、锌: 7.80 μmol/L
+    #      2、高密度脂蛋白胆固醇: 2.38 mmol/L
     summary_pat = re.compile(
         r'(?:\d+[、.]?\s*|、\s*|小结[：:]?\s*)'
         r'([\u4e00-\u9fa5a-zA-Z()（）（）]{2,30})[：:]\s*'
@@ -328,7 +388,7 @@ def _second_pass_scan(text: str, template_canonical: set,
         name = m.group(1).strip()
         value = m.group(2)
         unit = m.group(3) or ''
-        # Filter out non-indicator text
+        # 过滤非指标文本
         skip = ['过氧化氢', 'PH值', '白细胞酯酶', '阴道', '白带', '清洁度']
         if any(s in name for s in skip):
             continue
@@ -337,8 +397,8 @@ def _second_pass_scan(text: str, template_canonical: set,
                 'value': value, 'unit': unit, 'original_name': name
             }
 
-    # --- Pattern C: Name-value-unit in same line (value AFTER ref_range) ---
-    # Matches: 丙氨酸氨基转移酶 7-40 U/L 12.80
+    # --- 模式C: 名称-值-单位在同一行（值在参考范围后）---
+    # 匹配：丙氨酸氨基转移酶 7-40 U/L 12.80
     broad_table = re.compile(
         r'([\u4e00-\u9fa5a-zA-Z()（）]{2,30})\s+'
         r'(?:[≤≥<>\d][\d.\-—~至到\s]*?)\s+'
@@ -354,10 +414,10 @@ def _second_pass_scan(text: str, template_canonical: set,
                 'value': value, 'unit': unit, 'original_name': name
             }
 
-    # --- Pattern C2: name value ref_range unit (value BEFORE ref_range) ---
-    # Matches: 丙氨酸氨基转移酶 12.80 7-40 U/L
-    #         天门冬氨酸氨基转移酶 20.80 15-35 U/L
-    #         低密度脂蛋白胆固醇 2.35 <3.37 mmol/L
+    # --- 模式C2: 名称 值 参考范围 单位（值在参考范围前）---
+    # 匹配：丙氨酸氨基转移酶 12.80 7-40 U/L
+    #      天门冬氨酸氨基转移酶 20.80 15-35 U/L
+    #      低密度脂蛋白胆固醇 2.35 <3.37 mmol/L
     name_val_ref_unit = re.compile(
         r'([\u4e00-\u9fa5a-zA-Z()（）]{2,30})\s+'
         r'(\d+\.?\d*)\s+'
@@ -379,14 +439,29 @@ def _second_pass_scan(text: str, template_canonical: set,
 def extract_indicators_from_text(text: str,
                                   template: List[Dict[str, str]] = None,
                                   synonym_map: Dict[str, str] = None) -> Dict[str, Dict]:
-    """Extract all measurable indicators from PDF text.
+    """
+    从PDF文本中提取所有可量化的医学指标（核心功能）
 
-    Uses multi-strategy extraction with two passes:
-    Pass 1: structured patterns (brackets, tables, colon format)
+    这是整个脚本最核心的函数！使用多策略提取方法：
+
+    策略0: 特殊处理血压（需要拆分为收缩压和舒张压）
+    策略1: 括号格式 【指标名】值
+    策略2: 表格格式（逐行解析）
+    策略3: 冒号格式 名称：值
+    第二遍: 宽松扫描（捕获遗漏项）
+    第三遍: 断行拼接（处理PDF换行问题）
+
+    参数：
+        text: PDF文本内容
+        template: 指标模板（用于匹配标准名称）
+        synonym_map: 同义词映射（用于名称转换）
+
+    返回：包含所有提取指标的字典 {指标名: {value, unit, original_name}}
     """
     results = {}
 
-    # --- Strategy 0: Blood pressure ---
+    # --- 策略0: 血压特殊处理 ---
+    # 血压需要拆分为收缩压和舒张压两个指标
     bp_pat = re.compile(r'血压\s*[:：]?\s*(\d{2,3})/(\d{2,3})\s*(mmHg)?')
     for m in bp_pat.finditer(text):
         results['血压'] = {
@@ -395,7 +470,8 @@ def extract_indicators_from_text(text: str,
             'original_name': '血压'
         }
 
-    # --- Strategy 0b: Value-before-unit (name value unit) ---
+    # --- 策略0b: 行内格式（名称 数值 单位）---
+    # 匹配如: 白细胞计数 5.2 10^9/L
     inline_pat = re.compile(
         r'([^\s\n\d]{2,15})\s+(\d+\.?\d*)\s+(' + '|'.join(
             re.escape(u) for u in MEDICAL_UNITS if len(u) >= 2
@@ -408,7 +484,8 @@ def extract_indicators_from_text(text: str,
         if name not in results:
             results[name] = {'value': value, 'unit': unit, 'original_name': name}
 
-    # --- Strategy 1: Bracket format 【指标名】值...单位 ---
+    # --- 策略1: 括号格式 【指标名】值...单位 ---
+    # 匹配如: 【甘油三酯】1.74 mmol/L
     bracket_pat = re.compile(
         r'【\*?([^】\n]+)】\s*(\d+\.?\d*(?:/\d+\.?\d*)?)',
     )
@@ -419,7 +496,8 @@ def extract_indicators_from_text(text: str,
         unit = _extract_unit(rest)
         results[name] = {'value': value, 'unit': unit, 'original_name': name}
 
-    # --- Strategy 2: Line-by-line table parsing ---
+    # --- 策略2: 表格格式（逐行解析）---
+    # 这是最常用的格式，处理表格形式的数据
     lines = text.split('\n')
     for line in lines:
         line = line.strip()
@@ -440,10 +518,10 @@ def extract_indicators_from_text(text: str,
             before_unit = line[:unit_pos].strip()
             after_unit = line[unit_pos + len(unit_name):].strip()
 
-            # Strip parenthesized reference ranges from after_unit
+            # 去除after_unit中的括号参考范围
             clean_after = re.sub(r'[（(][^）)]*[）)]', '', after_unit).strip()
             value = _extract_numeric_value(clean_after)
-            # If clean_after is empty/ref-only, try before_unit (name value ref format)
+            # 如果clean_after为空或仅含参考范围，尝试before_unit（名称 值 参考格式）
             if not value and ' ' in before_unit:
                 last_parts = before_unit.rsplit(' ', 2)
                 if len(last_parts) >= 2:
@@ -474,7 +552,7 @@ def extract_indicators_from_text(text: str,
                         'value': value, 'unit': '', 'original_name': name
                     }
 
-    # --- Strategy 3: Colon format 名称：值 ---
+    # --- 策略3: 冒号格式 名称：值 ---
     colon_pat = re.compile(r'([^\s\n：:]{2,12})[：:]\s*(\d+\.?\d*)')
     exclude_kw = ['日期', '时间', '科室', '医生', '电话', '单位', '部门', '工号',
                   '结论', '次数', '页码', '编号', '登记号', '档案号']
@@ -488,19 +566,19 @@ def extract_indicators_from_text(text: str,
                 'value': value, 'unit': '', 'original_name': name
             }
 
-    # --- Second Pass: relaxed scanning for missed items ---
+    # --- 第二遍扫描：宽松扫描以捕获遗漏项 ---
     if template:
         template_canonical = {row['canonical_name'] for row in template}
     else:
         template_canonical = set()
 
     second_results = _second_pass_scan(text, template_canonical, results)
-    # Only add second-pass items if NOT already in first-pass results
+    # 只添加不在第一遍结果中的第二遍扫描项
     for k, v in second_results.items():
         if k not in results:
             results[k] = v
 
-    # --- Third Pass: join split-line names and re-scan for still-missing items ---
+    # --- 第三遍扫描：拼接断行名称并重新扫描仍然缺失的项目 ---
     joined_text = _join_split_names(text)
     if joined_text != text:
         third_results = _second_pass_scan(joined_text, template_canonical, results)
@@ -512,7 +590,14 @@ def extract_indicators_from_text(text: str,
 
 
 def _find_unit(line: str) -> Optional[Tuple[str, int]]:
-    """Find medical unit in a line. Returns (unit, position)."""
+    """
+    在行中查找医学单位
+
+    参数：
+        line: 要搜索的文本行
+
+    返回：(单位, 位置) 或 None
+    """
     for unit in MEDICAL_UNITS:
         pos = line.find(unit)
         if pos >= 0:
@@ -521,7 +606,14 @@ def _find_unit(line: str) -> Optional[Tuple[str, int]]:
 
 
 def _extract_unit(text: str) -> str:
-    """Extract unit from text after a value."""
+    """
+    从值后的文本中提取单位
+
+    参数：
+        text: 值后面的文本
+
+    返回：单位字符串
+    """
     for unit in MEDICAL_UNITS:
         if unit in text[:20]:
             return unit
@@ -529,20 +621,27 @@ def _extract_unit(text: str) -> str:
 
 
 def _extract_numeric_value(text: str) -> Optional[str]:
-    """Extract numeric value from text, handling various formats."""
+    """
+    从文本中提取数值，处理各种格式
+
+    参数：
+        text: 要提取数值的文本
+
+    返回：数值字符串或None
+    """
     text = text.strip()
 
-    # Blood pressure: 101/59 or 101/59mmHg
+    # 血压：101/59 或 101/59mmHg
     bp_match = re.search(r'(\d+)/(\d+)\s*(?:mmHg)?', text)
     if bp_match:
         return f"{bp_match.group(1)}/{bp_match.group(2)}"
 
-    # Regular number with optional markers
+    # 常规数字（可能带标记符）
     num_match = re.search(r'(\d+\.?\d*)\s*[↑↓*]?\s*$', text)
     if num_match:
         return num_match.group(1)
 
-    # Any number
+    # 任意数字
     num_match = re.search(r'(\d+\.?\d*)', text)
     if num_match:
         return num_match.group(1)
@@ -551,10 +650,17 @@ def _extract_numeric_value(text: str) -> Optional[str]:
 
 
 def _extract_name(before_ref: str) -> Optional[str]:
-    """Extract item name, stripping reference range."""
+    """
+    提取项目名称，去除参考范围
+
+    参数：
+        before_ref: 参考范围前的文本
+
+    返回：项目名称或None
+    """
     cleaned = re.sub(r'^[【】\*\s]+|[【】\*\s:：]+$', '', before_ref.strip())
 
-    # Split at reference range start
+    # 在参考范围开始处分割
     split_pat = re.search(
         r'\s*(?:[：:]\s*\S+|[≤≥<>\u2264\u2265=]+\s*\d+|\d+\.?\d*\s*[－—\-~至到]+|[－—\-]+\s*$)',
         cleaned
@@ -569,11 +675,15 @@ def _extract_name(before_ref: str) -> Optional[str]:
 
 
 # ============================================================
-# Name Mapping (Hospital → Standard)
+# 名称映射（医院名称 → 标准名称）
 # ============================================================
 
 def load_synonym_map() -> Dict[str, str]:
-    """Load medical synonym map from references."""
+    """
+    从参考资料加载医学同义词映射
+
+    返回：同义词映射字典
+    """
     skill_dir = Path(__file__).parent.parent
     syn_path = skill_dir / "references" / "medical_synonyms.md"
 
@@ -584,7 +694,7 @@ def load_synonym_map() -> Dict[str, str]:
     with open(syn_path, "r", encoding="utf-8") as f:
         content = f.read()
 
-    # Parse lines like: "hospital1, hospital2 → canonical_name"
+    # 解析行格式："医院1, 医院2 → 标准名称"
     for line in content.split('\n'):
         line = line.strip()
         if not line.startswith('-') or '→' not in line:
@@ -606,22 +716,22 @@ def normalize_indicators(
     template: List[Dict[str, str]],
     synonym_map: Dict[str, str],
 ) -> Tuple[Dict[str, Dict], Dict[str, str]]:
-    """Map raw PDF indicators to standard names using template + synonyms.
+    """使用模板和同义词将原始PDF指标映射到标准名称
 
-    Returns:
-        (normalized_dict, hospital_to_canonical_map)
+    返回：
+        (标准化字典, 医院名称到标准名称的映射)
         normalized_dict: {canonical_name: {value, unit, original_name}}
         hospital_to_canonical_map: {hospital_name: canonical_name}
     """
     template_canonical_set = {row['canonical_name'] for row in template}
     official_feature_set = {row['official_feature_name'] for row in template}
-    # Reverse: official_feature_name → canonical_name
+    # 反向映射：official_feature_name → canonical_name
     feature_to_canonical = {row['official_feature_name']: row['canonical_name'] for row in template}
     normalized = {}
     hospital_to_canonical = {}
 
-    # Normalize synonym map: values may be canonical_name OR official_feature_name
-    # Convert all synonym values to canonical_name
+    # 标准化同义词映射：值可能是canonical_name或official_feature_name
+    # 将所有同义词值转换为canonical_name
     normalized_synonyms = {}
     for variant, value in synonym_map.items():
         if value in template_canonical_set:
@@ -630,20 +740,20 @@ def normalize_indicators(
             normalized_synonyms[variant] = feature_to_canonical[value]
     synonym_map = normalized_synonyms
 
-    # Build reverse synonym map: canonical → [variants]
+    # 构建反向同义词映射：标准名 → [变体列表]
     canonical_to_variants: Dict[str, List[str]] = {}
     for variant, canonical in synonym_map.items():
         if canonical not in canonical_to_variants:
             canonical_to_variants[canonical] = []
         canonical_to_variants[canonical].append(variant)
 
-    # Build canonical→feature_name lookup from template
+    # 从模板构建标准名→英文名的查找表
     canonical_to_feature = {
         row['canonical_name']: row['official_feature_name']
         for row in template
     }
 
-    # Handle blood pressure specially
+    # 特殊处理血压：拆分收缩压和舒张压
     bp_data = None
     for name, data in list(raw_indicators.items()):
         if '血压' in name and '/' in str(data.get('value', '')):
@@ -657,29 +767,25 @@ def normalize_indicators(
                         'systolic_bp': {'value': str(int(systolic)), 'unit': 'mmHg', 'original_name': name},
                         'diastolic_bp': {'value': str(int(diastolic)), 'unit': 'mmHg', 'original_name': name},
                     }
-                    # Store the original PDF term as BP source name.
-                    # If the PDF only shows "血压" as one combined field,
-                    # both SBP and DBP rows in the mapping file will show "血压".
-                    # If the PDF shows "高压"/"低压" separately, those go through
-                    # the normal synonym mapping path instead.
-                    hospital_to_canonical['_bp_source_name'] = name
-                    # Remove raw blood pressure
+                    # 收缩压和舒张压分别记录映射关系
+                    hospital_to_canonical[name + '（收缩压）'] = 'SBP'
+                    hospital_to_canonical[name + '（舒张压）'] = 'DBP'
                     del raw_indicators[name]
                 except ValueError:
                     pass
                 break
 
-    # Map each raw indicator (store by official_feature_name for data file compatibility)
+    # 映射每个原始指标（按official_feature_name存储，以兼容数据文件）
     for name, data in raw_indicators.items():
         canonical = None
 
-        # Exact match with canonical_name
+        # 与canonical_name精确匹配
         if name in template_canonical_set:
             canonical = name
-        # Match via synonyms
+        # 通过同义词匹配
         elif name in synonym_map and synonym_map[name] in template_canonical_set:
             canonical = synonym_map[name]
-        # Fuzzy: name contains a canonical name
+        # 模糊匹配：名称包含标准名称
         else:
             for cn in sorted(template_canonical_set, key=len, reverse=True):
                 if cn in name and len(cn) >= 3:
@@ -707,7 +813,15 @@ def normalize_indicators(
 # ============================================================
 
 def resolve_filename(output_dir: Path, base_name: str) -> Path:
-    """Resolve filename conflicts: base → base2 → base3 → ..."""
+    """
+    解决文件名冲突：基础名 → 基础名2 → 基础名3 → ...
+
+    参数：
+        output_dir: 输出目录
+        base_name: 基础文件名
+
+    返回：可用的文件路径
+    """
     name, ext = os.path.splitext(base_name)
     candidate = output_dir / base_name
     if not candidate.exists():
@@ -727,29 +841,39 @@ def generate_mapping_file(
     template: List[Dict[str, str]],
     output_dir: Path,
 ) -> Path:
-    """Generate a mapping CSV file for one hospital."""
+    """
+    生成医院的映射文件
+
+    映射文件记录了医院实际使用的指标名称与标准名称的对应关系。
+    例如：医院使用"丙氨酸氨基转移酶"，标准名称是"谷丙转氨酶"
+
+    文件格式：
+    hospital_name | canonical_name | official_feature_name | unit | reference | group
+    丙氨酸氨基转移酶 | 谷丙转氨酶 | alanine_aminotransferase | U/L | 9--50 | 肝胆功能
+
+    参数：
+        hospital_name: 医院名称
+        mappings: 医院名称→标准名称的映射字典
+        template: 指标模板（包含所有标准指标定义）
+        output_dir: 输出目录
+
+    返回：生成的映射文件路径
+    """
     filename = f"{hospital_name}mappings.csv"
     filepath = resolve_filename(output_dir, filename)
 
     with open(filepath, 'w', encoding='utf-8-sig', newline='') as f:
         writer = csv.writer(f)
-        # Header
+        # 写入表头
         writer.writerow([
             'hospital_name', 'canonical_name', 'official_feature_name',
             'official_unit', 'official_reference', 'official_group_zh'
         ])
 
-        # Reverse map: canonical → hospital_name
+        # 反向映射: 标准名称 → 医院名称
         canonical_to_hospital = {v: k for k, v in mappings.items()}
 
-        # Handle blood pressure: if PDF only showed "血压" as one combined field,
-        # both SBP and DBP rows should show the exact original term (e.g. "血压").
-        # When separate "高压"/"低压" appear, they go via normal synonym path.
-        bp_source = mappings.get('_bp_source_name', '')
-        if bp_source:
-            canonical_to_hospital['SBP'] = bp_source
-            canonical_to_hospital['DBP'] = bp_source
-
+        # 按模板顺序写入每一行（确保顺序一致）
         for row in template:
             cn = row['canonical_name']
             if cn in canonical_to_hospital:
@@ -775,39 +899,72 @@ def generate_data_file(
     output_dir: Path,
     batch_size: int,
 ) -> Path:
-    """Generate a data CSV file for all patients in the batch."""
+    """
+    生成数据文件（包含所有患者的指标数据）
+
+    数据文件格式：
+    第1行：表头（按模板顺序排列的标准英文名称）
+    第2行：患者1的数据
+    第3行：患者2的数据
+    ...
+
+    文件名示例：26,07,22 14:30[3].csv（2026年7月22日14:30处理了3份报告）
+
+    参数：
+        patients_data: 所有患者的数据列表
+        template: 指标模板（用于确定列顺序）
+        output_dir: 输出目录
+        batch_size: 本批处理的PDF数量
+
+    返回：生成的数据文件路径
+    """
     now = datetime.now()
     base_name = f"{str(now.year)[-2:]},{now.month:02d},{now.day:02d} {now.hour:02d}：{now.minute:02d}[{batch_size}].csv"
     filepath = resolve_filename(output_dir, base_name)
 
-    # Feature order from template
+    # 从模板获取指标顺序（确保列顺序一致）
     feature_order = [row['official_feature_name'] for row in template]
 
     with open(filepath, 'w', encoding='utf-8-sig', newline='') as f:
         writer = csv.writer(f)
-        # Header row
+        # 写入表头
         writer.writerow(feature_order)
 
-        # Data rows
+        # 写入每个患者的数据
         for patient in patients_data:
             row_data = []
             for feat in feature_order:
                 if feat in patient:
                     val = patient[feat].get('value', '')
-                    # For blood pressure (already split), use direct value
                     row_data.append(str(val))
                 else:
-                    row_data.append('')
+                    row_data.append('')  # 缺失值用空字符串表示
             writer.writerow(row_data)
 
     return filepath
 
 
 # ============================================================
-# Main Processing Pipeline
+# 主处理流程
 # ============================================================
 
 def main():
+    """
+    主函数：协调整个处理流程
+
+    处理步骤：
+    1. 解析命令行参数
+    2. 收集PDF文件
+    3. 加载模板和同义词
+    4. 逐个处理PDF：
+       a. 读取PDF文本
+       b. 识别医院名称
+       c. 提取患者信息
+       d. 提取医学指标
+    5. 生成输出文件：
+       a. 映射文件（每家医院一份）
+       b. 数据文件（所有患者一份）
+    """
     parser = argparse.ArgumentParser(
         description='Medical Report Processor — Process PDF exam reports',
         formatter_class=argparse.RawDescriptionHelpFormatter,

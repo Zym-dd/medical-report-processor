@@ -36,6 +36,7 @@ env/
 input/*.pdf
 output/*.xlsx
 logs/*.log
+_user_meta.json
 
 # 保留目录结构
 !input/.gitkeep
